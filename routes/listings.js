@@ -3,9 +3,9 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
-const path = require('path');
 const Listing = require('../models/Listing');
-const User = require('../models/User');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 // Middleware
 const authenticateToken = (req, res, next) => {
@@ -21,22 +21,27 @@ const authenticateToken = (req, res, next) => {
   }
 };
 
-// Multer Storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    // In a real separate backend deployment, you would ensure this folder exists
-    // or better yet, upload to S3/Cloudinary.
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  }
+// Cloudinary Configuration
+cloudinary.config({
+  cloud_name: dwl5b4xda,
+  api_key: 826956653251315,
+  api_secret: 9QuT7gji36gNK-6vV3n6M4j0wIE
 });
+
+// Configure Multer Storage for Cloudinary
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'bookbridge_listings',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [{ width: 800, height: 1000, crop: 'limit' }] // Resize for optimization
+  },
+});
+
 const upload = multer({ storage: storage });
 
 // CREATE LISTING
 router.post('/new', authenticateToken, async (req, res) => {
-  console.log(req.body);
   try {
     const listing = new Listing({
       user: req.user.id,
@@ -44,7 +49,6 @@ router.post('/new', authenticateToken, async (req, res) => {
     });
     
     const savedListing = await listing.save();
-    
     // Populate user info before returning
     await savedListing.populate('user', 'name email avatar city rating');
     
@@ -62,13 +66,14 @@ router.post('/new', authenticateToken, async (req, res) => {
 });
 
 // UPLOAD IMAGES
-// Note: You need to serve the 'uploads' folder statically in server.js
 router.post('/images', authenticateToken, upload.array('images', 5), (req, res) => {
-  const fileUrls = req.files.map(file => {
-      // Assuming server runs on localhost:5000
-      return `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
-  });
-  res.json({ urls: fileUrls });
+  try {
+    // Cloudinary storage automatically puts the secure URL in file.path
+    const fileUrls = req.files.map(file => file.path);
+    res.json({ urls: fileUrls });
+  } catch (error) {
+    res.status(500).json({ error: 'Image upload failed' });
+  }
 });
 
 // GET ALL LISTINGS
@@ -135,6 +140,8 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     if (listing.user.toString() !== req.user.id) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
+
+    // Optional: Delete images from Cloudinary here if needed, requires extracting public_id
 
     await Listing.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted successfully' });
